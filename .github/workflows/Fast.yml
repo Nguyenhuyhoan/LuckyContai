@@ -1,0 +1,93 @@
+
+name: Xcode - Fast 😂 LiveContainer+SideStore
+
+on:
+  push:
+  workflow_dispatch:
+
+# Tự động hủy ngay lần chạy cũ nếu bạn push code mới liên tiếp (tiết kiệm thời gian chờ)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Fast Build LiveContainer+SideStore IPA
+    runs-on: xcode-27
+    permissions:
+      contents: write
+    env:
+      scheme: LiveContainer
+      archive_path: archive
+    steps:
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '27.2'
+
+      - name: Fast Checkout (Shallow Clone)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # Cache Swift Package Manager / DerivedData để các lần build sau nhanh gấp đôi
+      - name: Cache SPM & Build Data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+            build_spm_cache
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/*.xcodeproj/project.pbxproj', '**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Build Archive (Speed Optimized)
+        run: |
+          if ls -A | grep -iq "\.xcworkspace$"; then
+             target_flag="-workspace"
+             target_file=$(ls -A | grep -i "\.xcworkspace$" | head -n 1 | awk '{$1=$1;print}')
+          else
+             target_flag="-project"
+             target_file=$(ls -A | grep -i "\.xcodeproj$" | head -n 1 | awk '{$1=$1;print}')
+          fi
+
+          xcodebuild archive \
+            -archivePath "$archive_path" \
+            -scheme "$scheme" \
+            "$target_flag" "$target_file" \
+            -sdk iphoneos \
+            -arch arm64 \
+            -configuration Release \
+            -clonedSourcePackagesDirPath build_spm_cache \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            ENABLE_BITCODE=NO \
+            | xcpretty && exit ${PIPESTATUS[0]}
+
+      - name: Package LiveContainer+SideStore.ipa
+        run: |
+          sh .github/build_github.sh
+
+      - name: Upload LiveContainer+SideStore.ipa (Link tải ngay ở Actions)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveContainer+SideStore.ipa
+          path: ${{ env.scheme }}+SideStore.ipa
+          compression-level: 0
+          retention-days: 7
+
+      - name: Publish Direct Download Link (Nightly Release)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "LiveContainer+SideStore (Latest Fast Build)"
+          body: |
+            ⚡ **Bản build nhanh mới nhất:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            📥 **Tải trực tiếp IPA bên dưới:** `LiveContainer+SideStore.ipa`
+          files: |
+            ${{ env.scheme }}+SideStore.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
